@@ -34,6 +34,7 @@ app.conf.update(
 )
 
 
+# python
 @app.task
 def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
     """
@@ -58,6 +59,7 @@ def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
             (file_name,)
         )
         entries = cursor.fetchall()
+        logger.info(f"Total de entradas de log obtenidas: {len(entries)}")
 
         # Análisis de patrones
         results = {
@@ -70,16 +72,17 @@ def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
         }
 
         # Patrones específicos a buscar
-        error_patterns = [
-            r"(?i)exception|error|fail|crash",
-            r"(?i)timeout|timed out",
-            r"(?i)connection (?:refused|reset|closed)",
-            r"(?i)out of (?:memory|resources)",
-            r"(?i)permission denied|unauthorized",
-        ]
+        error_patterns = {
+            "connection_issues": re.compile(r"(?i)connection (?:refused|reset|closed|error|failed)"),
+            "timeouts": re.compile(r"(?i)timeout|timed out"),
+            "resources": re.compile(r"(?i)out of (?:memory|resources)"),
+            "permissions": re.compile(r"(?i)permission denied|unauthorized"),
+            "general_errors": re.compile(r"(?i)exception|error|fail|crash"),
+            "system_failures": re.compile(r"(?i)system (?:crash|halted)|kernel panic|segmentation fault")
+        }
 
         # Contadores para análisis
-        pattern_counts = {pattern: 0 for pattern in error_patterns}
+        pattern_counts = {pattern_name: 0 for pattern_name in error_patterns}
         hour_distribution = defaultdict(int)
         source_counts = Counter()
         error_messages = []
@@ -99,9 +102,10 @@ def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
                 source_counts[source] += 1
 
             # Buscar patrones de error
-            if level and "ERROR" in level.upper():
+            if level and any(err_term in level.upper() for err_term in ["ERROR", "CRITICAL", "FATAL"]):
                 error_messages.append(message)
 
+                logger.debug(f"Checking entry: level={level}, message={message[:50]}...")
                 for pattern in error_patterns:
                     if re.search(pattern, message):
                         pattern_counts[pattern] += 1
@@ -145,7 +149,6 @@ def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
     finally:
         if 'conn' in locals():
             conn.close()
-
 
 @app.task
 def generate_log_report(file_name: str) -> Dict[str, Any]:

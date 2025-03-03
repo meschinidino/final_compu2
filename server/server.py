@@ -175,11 +175,24 @@ def log_processor(task_queue: mp.Queue) -> None:
 
                     # Extraer información básica (ejemplo simple)
                     try:
-                        parts = line.split(' - ', 3)
-                        if len(parts) >= 4:
-                            timestamp, level, source, message = parts
+                        # Parse the timestamp and level
+                        timestamp_and_level = line.split(' ', 2)
+                        if len(timestamp_and_level) >= 3:
+                            timestamp = timestamp_and_level[0] + ' ' + timestamp_and_level[1]
+                            remaining = timestamp_and_level[2]
+
+                            # Extract level and message
+                            level_and_message = remaining.split(' ', 1)
+                            if len(level_and_message) >= 2:
+                                level = level_and_message[0]
+                                message = level_and_message[1]
+                            else:
+                                level = level_and_message[0]
+                                message = ""
+
+                            # No source in this format
+                            source = "unknown"
                         else:
-                            # Formato no estándar, tratar como mensaje genérico
                             timestamp = ""
                             level = "UNKNOWN"
                             source = "unknown"
