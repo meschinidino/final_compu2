@@ -1,52 +1,43 @@
-# render.yaml
 services:
   - type: web
     name: log-processor-api
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python api_server.py
-    plan: starter
+    plan: free
     envVars:
       - key: HOST
         value: 0.0.0.0
       - key: PORT
-        sync: false # Usa el puerto asignado por Render
+        sync: false # Uses the port assigned by Render
       - key: STORAGE_PATH
-        value: /data/logs
+        value: /tmp/logs
       - key: DB_PATH
-        value: /data/logs.db
+        value: /tmp/logs.db
       - key: BROKER_URL
         fromService:
           type: redis
           name: log-processor-redis
           property: connectionString
-    disk:
-      name: logs-data
-      mountPath: /data
-      sizeGB: 1
 
   - type: worker
     name: log-processor-worker
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: celery -A workers worker --loglevel=info
-    plan: starter
+    plan: free
     envVars:
       - key: STORAGE_PATH
-        value: /data/logs
+        value: /tmp/logs
       - key: DB_PATH
-        value: /data/logs.db
+        value: /tmp/logs.db
       - key: BROKER_URL
         fromService:
           type: redis
           name: log-processor-redis
           property: connectionString
-    disk:
-      name: worker-data
-      mountPath: /data
-      sizeGB: 1
 
   - type: redis
     name: log-processor-redis
     ipAllowList: []
-    plan: starter
+    plan: free
