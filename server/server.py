@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Tuple, Dict, Any
 import json
@@ -145,6 +146,14 @@ def log_processor(task_queue: mp.Queue) -> None:
     # Conectar a la base de datos
     conn = sqlite3.connect(DB_PATH)
 
+    # Patrón para extraer información de logs
+    log_pattern = re.compile(
+        r'(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+'
+        r'(?P<level>[A-Z]+)\s+'
+        r'(?:(?P<source>[^:]+):\s+)?'
+        r'(?P<message>.*)'
+    )
+
     while True:
         try:
             task = task_queue.get()
@@ -165,6 +174,7 @@ def log_processor(task_queue: mp.Queue) -> None:
             }
 
             # Procesar línea por línea el archivo de logs
+            # Procesar línea por línea el archivo de logs
             with open(file_path, 'r') as f:
                 for line in f:
                     line = line.strip()
@@ -173,38 +183,28 @@ def log_processor(task_queue: mp.Queue) -> None:
 
                     stats["entry_count"] += 1
 
-                    # Extraer información básica (ejemplo simple)
+                    # Extraer información usando regex
                     try:
-                        # Parse the timestamp and level
-                        timestamp_and_level = line.split(' ', 2)
-                        if len(timestamp_and_level) >= 3:
-                            timestamp = timestamp_and_level[0] + ' ' + timestamp_and_level[1]
-                            remaining = timestamp_and_level[2]
-
-                            # Extract level and message
-                            level_and_message = remaining.split(' ', 1)
-                            if len(level_and_message) >= 2:
-                                level = level_and_message[0]
-                                message = level_and_message[1]
-                            else:
-                                level = level_and_message[0]
-                                message = ""
-
-                            # No source in this format
-                            source = "unknown"
+                        match = log_pattern.match(line)
+                        if match:
+                            timestamp = match.group('timestamp')
+                            level = match.group('level')
+                            source = match.group('source') or "unknown"
+                            message = match.group('message')
                         else:
+                            # Fallback para líneas que no coinciden con el patrón
                             timestamp = ""
                             level = "UNKNOWN"
                             source = "unknown"
                             message = line
 
                         # Actualizar estadísticas según el nivel
-                        level = level.upper()
-                        if "ERROR" in level:
+                        level_upper = level.upper()
+                        if "ERROR" in level_upper:
                             stats["error_count"] += 1
-                        elif "WARN" in level:
+                        elif "WARN" in level_upper:
                             stats["warning_count"] += 1
-                        elif "INFO" in level:
+                        elif "INFO" in level_upper:
                             stats["info_count"] += 1
 
                         # Guardar entrada en la base de datos
@@ -213,9 +213,9 @@ def log_processor(task_queue: mp.Queue) -> None:
                             "INSERT INTO log_entries (timestamp, level, source, message, file_name) VALUES (?, ?, ?, ?, ?)",
                             (timestamp, level, source, message, file_name)
                         )
-
                     except Exception as e:
                         logger.error(f"Error al procesar línea: {e}")
+
 
             # Guardar estadísticas en la base de datos
             cursor = conn.cursor()

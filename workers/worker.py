@@ -106,9 +106,9 @@ def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
                 error_messages.append(message)
 
                 logger.debug(f"Checking entry: level={level}, message={message[:50]}...")
-                for pattern in error_patterns:
-                    if re.search(pattern, message):
-                        pattern_counts[pattern] += 1
+                for pattern_name, pattern in error_patterns.items():
+                    if pattern.search(message):
+                        pattern_counts[pattern_name] += 1
 
         # Formatear resultados
         results["patterns"] = {
@@ -119,6 +119,8 @@ def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
             "general_errors": pattern_counts[r"(?i)exception|error|fail|crash"]
         }
 
+        # Formatear resultados
+        results["patterns"] = dict(pattern_counts)
         results["time_distribution"] = dict(hour_distribution)
         results["sources"] = dict(source_counts)
 
