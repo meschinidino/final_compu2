@@ -3,7 +3,7 @@ services:
     name: log-processor-api
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python api_server.py
+    startCommand: python server/server.py
     plan: free
     envVars:
       - key: HOST

@@ -8,7 +8,6 @@ from typing import Dict, List, Any, Optional
 import re
 from datetime import datetime
 from collections import Counter, defaultdict
-
 from celery import Celery
 from dotenv import load_dotenv
 
