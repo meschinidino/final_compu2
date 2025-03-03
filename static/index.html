@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Procesamiento de Logs</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        button:hover {
+            background-color: #2980b9;
+        }
+
+        .file-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .file-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .status.pending {
+            background-color: #f1c40f;
+            color: #7f6404;
+        }
+
+        .status.processing {
+            background-color: #3498db;
+            color: white;
+        }
+
+        .status.completed {
+            background-color: #2ecc71;
+            color: white;
+        }
+
+        .status.error {
+            background-color: #e74c3c;
+            color: white;
+        }
+
+        #progressBar {
+            width: 100%;
+            background-color: #e0e0e0;
+            border-radius: 4px;
+            margin-top: 10px;
+            overflow: hidden;
+            height: 20px;
+            display: none;
+        }
+
+        #progressBarFill {
+            height: 100%;
+            background-color: #3498db;
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        #reportSection {
+            margin-top: 20px;
+        }
+
+        #reportContent {
+            white-space: pre-wrap;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #e0e0e0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Sistema de Procesamiento de Logs</h1>
+
+        <div class="card">
+            <h2>Subir Archivo de Logs</h2>
+            <form id="uploadForm">
+                <div class="form-group">
+                    <label for="logFile">Seleccionar archivo:</label>
+                    <input type="file" id="logFile" name="file" required>
+                </div>
+
+                <button type="submit">Subir Archivo</button>
+
+                <div id="progressBar">
+                    <div id="progressBarFill"></div>
+                </div>
+                <div id="uploadStatus"></div>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2>Archivos Procesados</h2>
+            <ul id="fileList" class="file-list">
+                <li class="file-item">No hay archivos procesados</li>
+            </ul>
+        </div>
+
+        <div id="reportSection" class="card hidden">
+            <h2>Informe de Análisis</h2>
+            <div id="reportContent"></div>
+        </div>
+    </div>
+
+    <script>
+        // Configuración base
+        const API_URL = 'http://localhost:8888'; // Cambiar según despliegue
+
+        // Variables globales
+        let processedFiles = [];
+
+        // Elementos DOM
+        const uploadForm = document.getElementById('uploadForm');
+        const fileList = document.getElementById('fileList');
+        const progressBar = document.getElementById('progressBar');
+        const progressBarFill = document.getElementById('progressBarFill');
+        const uploadStatus = document.getElementById('uploadStatus');
+        const reportSection = document.getElementById('reportSection');
+        const reportContent = document.getElementById('reportContent');
+
+        // Inicializar
+        loadFileList();
+
+        // Event Listeners
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fileInput = document.getElementById('logFile');
+
+            if (!fileInput.files.length) {
+                alert('Por favor selecciona un archivo');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            await uploadFile(file);
+        });
+
+        // Funciones
+        async function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            progressBar.style.display = 'block';
+            progressBarFill.style.width = '0%';
+            uploadStatus.textContent = 'Subiendo archivo...';
+
+            try {
+                const xhr = new XMLHttpRequest();
+
+                // Configurar progreso
+                xhr.upload.addEventListener('progress', (event) => {
+                    if (event.lengthComputable) {
+                        const percentComplete = (event.loaded / event.total) * 100;
+                        progressBarFill.style.width = percentComplete + '%';
+                    }
+                });
+
+                // Configurar respuesta
+                xhr.onload = function() {
+                    if (xhr.status === 200) {
+                        const response = JSON.parse(xhr.responseText);
+                        uploadStatus.textContent = `Archivo ${response.file_name} subido correctamente`;
+                        uploadForm.reset();
+                        setTimeout(() => loadFileList(), 1000);
+                    } else {
+                        const error = JSON.parse(xhr.responseText);
+                        uploadStatus.textContent = `Error: ${error.message}`;
+                    }
+                };
+
+                xhr.onerror = function() {
+                    uploadStatus.textContent = 'Error al conectar con el servidor';
+                };
+
+                // Enviar solicitud
+                xhr.open('POST', `${API_URL}/api/logs`);
+                xhr.send(formData);
+
+            } catch (error) {
+                uploadStatus.textContent = `Error: ${error.message}`;
+                progressBar.style.display = 'none';
+            }
+        }
+
+        async function loadFileList() {
+            try {
+                // En una implementación real, tendrías un endpoint para listar archivos
+                // Por ahora, usaremos almacenamiento local para demo
+                const storedFiles = localStorage.getItem('processedFiles');
+                if (storedFiles) {
+                    processedFiles = JSON.parse(storedFiles);
+                }
+
+                if (!processedFiles.length) {
+                    fileList.innerHTML = '<li class="file-item">No hay archivos procesados</li>';
+                    return;
+                }
+
+                // Actualizar lista
+                fileList.innerHTML = '';
+
+                for (const file of processedFiles) {
+                    try {
+                        // Obtener estado actualizado
+                        const response = await fetch(`${API_URL}/api/logs/${file.fileName}/status`);
+                        if (response.ok) {
+                            const status = await response.json();
+
+                            const li = document.createElement('li');
+                            li.className = 'file-item';
+
+                            let statusClass = 'pending';
+                            if (status.processing_status === 'completed') {
+                                statusClass = 'completed';
+                            } else if (status.processing_status === 'partially_processed') {
+                                statusClass = 'processing';
+                            }
+
+                            li.innerHTML = `
+                                <span>${file.fileName}</span>
+                                <div>
+                                    <span class="status ${statusClass}">${status.processing_status}</span>
+                                    ${status.report_available ? '<button class="view-report" data-filename="' + file.fileName + '">Ver Informe</button>' : ''}
+                                </div>
+                            `;
+
+                            fileList.appendChild(li);
+                        }
+                    } catch (error) {
+                        console.error(`Error al obtener estado para ${file.fileName}:`, error);
+
+                        // Mostrar versión sin estado en caso de error
+                        const li = document.createElement('li');
+                        li.className = 'file-item';
+                        li.innerHTML = `
+                            <span>${file.fileName}</span>
+                            <span class="status error">Error</span>
+                        `;
+                        fileList.appendChild(li);
+                    }
+                }
+
+                // Agregar event listeners para botones de informe
+                document.querySelectorAll('.view-report').forEach(button => {
+                    button.addEventListener('click', () => {
+                        loadReport(button.getAttribute('data-filename'));
+                    });
+                });
+
+            } catch (error) {
+                console.error('Error al cargar lista de archivos:', error);
+                fileList.innerHTML = '<li class="file-item">Error al cargar archivos</li>';
+            }
+        }
+
+        async function loadReport(fileName) {
+            try {
+                const response = await fetch(`${API_URL}/api/logs/${fileName}/report`);
+
+                if (response.ok) {
+                    const report = await response.json();
+
+                    // Mostrar sección de informe
+                    reportSection.classList.remove('hidden');
+
+                    // Formatear informe para mostrar
+                    reportContent.innerHTML = `
+                        <h3>Informe para: ${report.file_name}</h3>
+                        <p><strong>Generado:</strong> ${report.generated_at}</p>
+                        <p><strong>Estado:</strong> ${report.health_status}</p>
+
+                        <h4>Resumen</h4>
+                        <ul>
+                            <li>Total de entradas: ${report.summary.total_entries}</li>
+                            <li>Errores: ${report.summary.error_count} (${report.summary.error_rate})</li>
+                            <li>Advertencias: ${report.summary.warning_count} (${report.summary.warning_rate})</li>
+                            <li>Info: ${report.summary.info_count}</li>
+                        </ul>
+
+                        ${report.common_errors ? `
+                            <h4>Errores Comunes</h4>
+                            <ul>
+                                ${report.common_errors.map(error => `
+                                    <li>${error.message} (${error.count} ocurrencias)</li>
+                                `).join('')}
+                            </ul>
+                        ` : ''}
+                    `;
+
+                    // Scroll al informe
+                    reportSection.scrollIntoView({ behavior: 'smooth' });
+                } else {
+                    alert('No se pudo cargar el informe');
+                }
+
+            } catch (error) {
+                console.error('Error al cargar informe:', error);
+                alert('Error al cargar el informe');
+            }
+        }
+
+        // Función para simular subida (solo para demo)
+        function simulateUpload(fileName) {
+            // Agregar archivo a la lista local
+            processedFiles.push({
+                fileName: fileName,
+                uploadedAt: new Date().toISOString()
+            });
+
+            localStorage.setItem('processedFiles', JSON.stringify(processedFiles));
+            loadFileList();
+        }
+    </script>
+</body>
+</html>
