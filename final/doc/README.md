@@ -48,21 +48,49 @@ graph TD;
 - **Asincronismo (asyncio)**: Manejo eficiente de tareas concurrentes.
 - **Base de Datos (SQLite, PostgreSQL, o similar)**: Almacenamiento de resultados.
 
-## Instalación y Uso
-1. Clonar el repositorio.
-   ```sh
-   git clone https://github.com/usuario/proyecto_final.git
-   cd proyecto_final/final
-   ```
-2. Instalar dependencias.
-   ```sh
+# Instrucciones de Uso y Despliegue
+
+## Configuración Local
+
+### Requisitos Previos
+1. Python 3.7+ instalado
+2. RabbitMQ instalado (para Celery)
+3. Git (opcional, para clonar el repositorio)
+
+### Pasos para Configuración Local
+
+1. **Instalar dependencias**:
+   ```bash
    pip install -r requirements.txt
    ```
-3. Iniciar el servidor.
-   ```sh
+
+2. **Configurar variables de entorno**:
+   Crea un archivo `.env` en el directorio raíz con el siguiente contenido:
+   ```
+   HOST=127.0.0.1
+   PORT=8888
+   STORAGE_PATH=logs
+   DB_PATH=logs.db
+   BROKER_URL=pyamqp://guest@localhost//
+   ```
+
+3. **Crear directorios necesarios**:
+   ```bash
+   mkdir -p logs
+   ```
+
+4. **Iniciar el servidor**:
+   ```bash
    python server.py
    ```
-4. Enviar un archivo de logs desde el cliente.
-   ```sh
-   python client.py logs/ejemplo.log
+
+5. **Iniciar los workers de Celery** (en otra terminal):
+   ```bash
+   celery -A workers worker --loglevel=info
    ```
+
+6. **Enviar archivos de logs usando el cliente**:
+   ```bash
+   python client.py ruta/al/archivo.log
+   ```
+
