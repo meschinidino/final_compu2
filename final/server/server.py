@@ -143,6 +143,16 @@ def log_processor(task_queue: mp.Queue) -> None:
     logger = logging.getLogger('log_processor')
     logger.info("Procesador de logs iniciado")
 
+    import importlib.util
+    import os
+
+    workers_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "workers", "workers.py")
+
+    spec = importlib.util.spec_from_file_location("workers", workers_path)
+    workers_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(workers_module)
+    process_log_file = workers_module.process_log_file
+
     # Conectar a la base de datos
     conn = sqlite3.connect(DB_PATH)
 
@@ -224,6 +234,8 @@ def log_processor(task_queue: mp.Queue) -> None:
                 (file_name, stats["entry_count"], stats["error_count"], stats["warning_count"], stats["info_count"])
             )
             conn.commit()
+
+            process_log_file.delay(file_name)
 
             logger.info(
                 f"Archivo {file_name} procesado. Entradas: {stats['entry_count']}, Errores: {stats['error_count']}")

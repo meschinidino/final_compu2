@@ -10,6 +10,7 @@ from datetime import datetime
 from collections import Counter, defaultdict
 from celery import Celery
 from dotenv import load_dotenv
+from celery import chain
 
 # Cargar variables de entorno
 load_dotenv()
@@ -53,6 +54,11 @@ def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
+        # Crear tabla de análisis si no existe
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS log_analysis (id INTEGER PRIMARY KEY AUTOINCREMENT, file_name TEXT, results TEXT, analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+
         # Obtener entradas de log para el archivo
         cursor.execute(
             "SELECT id, timestamp, level, source, message FROM log_entries WHERE file_name = ?",
@@ -73,12 +79,12 @@ def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
 
         # Patrones específicos a buscar
         error_patterns = {
-            "connection_issues": re.compile(r"(?i)connection (?:refused|reset|closed|error|failed)"),
-            "timeouts": re.compile(r"(?i)timeout|timed out"),
-            "resources": re.compile(r"(?i)out of (?:memory|resources)"),
-            "permissions": re.compile(r"(?i)permission denied|unauthorized"),
-            "general_errors": re.compile(r"(?i)exception|error|fail|crash"),
-            "system_failures": re.compile(r"(?i)system (?:crash|halted)|kernel panic|segmentation fault")
+            "connection_issues": r"(?i)connection (?:refused|reset|closed|error|failed)",
+            "timeouts": r"(?i)timeout|timed out",
+            "resources": r"(?i)out of (?:memory|resources)",
+            "permissions": r"(?i)permission denied|unauthorized",
+            "general_errors": r"(?i)exception|error|fail|crash",
+            "system_failures": r"(?i)system (?:crash|halted)|kernel panic|segmentation fault"
         }
 
         # Contadores para análisis
@@ -106,18 +112,9 @@ def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
                 error_messages.append(message)
 
                 logger.debug(f"Checking entry: level={level}, message={message[:50]}...")
-                for pattern_name, pattern in error_patterns.items():
-                    if pattern.search(message):
+                for pattern_name, pattern_str in error_patterns.items():
+                    if re.search(pattern_str, message):
                         pattern_counts[pattern_name] += 1
-
-        # Formatear resultados
-        results["patterns"] = {
-            "connection_issues": pattern_counts[r"(?i)connection (?:refused|reset|closed)"],
-            "timeouts": pattern_counts[r"(?i)timeout|timed out"],
-            "resources": pattern_counts[r"(?i)out of (?:memory|resources)"],
-            "permissions": pattern_counts[r"(?i)permission denied|unauthorized"],
-            "general_errors": pattern_counts[r"(?i)exception|error|fail|crash"]
-        }
 
         # Formatear resultados
         results["patterns"] = dict(pattern_counts)
@@ -133,9 +130,6 @@ def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
 
         # Guardar resultados del análisis
         result_json = json.dumps(results)
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS log_analysis (id INTEGER PRIMARY KEY AUTOINCREMENT, file_name TEXT, results TEXT, analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
-        )
         cursor.execute(
             "INSERT INTO log_analysis (file_name, results) VALUES (?, ?)",
             (file_name, result_json)
@@ -154,23 +148,55 @@ def analyze_log_patterns(file_name: str) -> Dict[str, Any]:
 
 @app.task
 def generate_log_report(file_name: str) -> Dict[str, Any]:
-    """
-    Genera un informe estadístico basado en los logs procesados.
-
-    Args:
-        file_name: Nombre del archivo de logs a analizar
-
-    Returns:
-        Dict con el informe estadístico
-    """
+    """Generate log report with improved database structure"""
     logger.info(f"Generando informe para: {file_name}")
 
     try:
-        # Conectar a la base de datos
+        # Connect to database
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
-        # Obtener estadísticas básicas
+        # Create normalized tables if they don't exist
+        cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS log_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_name TEXT,
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            total_entries INTEGER,
+            error_count INTEGER,
+            warning_count INTEGER,
+            info_count INTEGER,
+            error_rate TEXT,
+            warning_rate TEXT,
+            health_status TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS log_patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id INTEGER,
+            pattern_name TEXT,
+            count INTEGER,
+            FOREIGN KEY(report_id) REFERENCES log_reports(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS log_common_errors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id INTEGER,
+            message TEXT,
+            count INTEGER,
+            FOREIGN KEY(report_id) REFERENCES log_reports(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS log_time_distribution (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id INTEGER,
+            hour INTEGER,
+            count INTEGER,
+            FOREIGN KEY(report_id) REFERENCES log_reports(id)
+        );
+        """)
+
+        # Get basic statistics
         cursor.execute(
             "SELECT entry_count, error_count, warning_count, info_count FROM log_stats WHERE file_name = ?",
             (file_name,)
@@ -181,12 +207,56 @@ def generate_log_report(file_name: str) -> Dict[str, Any]:
             return {"status": "error", "message": f"No se encontraron estadísticas para {file_name}"}
 
         entry_count, error_count, warning_count, info_count = stats
-
-        # Calcular métricas adicionales
         error_rate = (error_count / entry_count * 100) if entry_count > 0 else 0
         warning_rate = (warning_count / entry_count * 100) if entry_count > 0 else 0
+        health_status = "critical" if error_rate > 10 else "warning" if error_rate > 5 else "healthy"
 
-        # Crear informe
+        # Get pattern analysis
+        cursor.execute(
+            "SELECT results FROM log_analysis WHERE file_name = ? ORDER BY analyzed_at DESC LIMIT 1",
+            (file_name,)
+        )
+        analysis_row = cursor.fetchone()
+        pattern_analysis = json.loads(analysis_row[0]) if analysis_row else {}
+
+        # Insert main report record
+        cursor.execute(
+            """INSERT INTO log_reports 
+               (file_name, generated_at, total_entries, error_count, warning_count, 
+                info_count, error_rate, warning_rate, health_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (file_name, datetime.now().isoformat(), entry_count, error_count, warning_count,
+             info_count, f"{error_rate:.2f}%", f"{warning_rate:.2f}%", health_status)
+        )
+        report_id = cursor.lastrowid
+
+        # Insert patterns
+        patterns = pattern_analysis.get("patterns", {})
+        for pattern_name, count in patterns.items():
+            cursor.execute(
+                "INSERT INTO log_patterns (report_id, pattern_name, count) VALUES (?, ?, ?)",
+                (report_id, pattern_name, count)
+            )
+
+        # Insert common errors
+        common_errors = pattern_analysis.get("common_errors", [])
+        for error in common_errors:
+            cursor.execute(
+                "INSERT INTO log_common_errors (report_id, message, count) VALUES (?, ?, ?)",
+                (report_id, error["message"], error["count"])
+            )
+
+        # Insert time distribution
+        time_dist = pattern_analysis.get("time_distribution", {})
+        for hour, count in time_dist.items():
+            cursor.execute(
+                "INSERT INTO log_time_distribution (report_id, hour, count) VALUES (?, ?, ?)",
+                (report_id, int(hour), count)
+            )
+
+        conn.commit()
+
+        # Return data in the same format for API compatibility
         report = {
             "file_name": file_name,
             "generated_at": datetime.now().isoformat(),
@@ -198,32 +268,11 @@ def generate_log_report(file_name: str) -> Dict[str, Any]:
                 "error_rate": f"{error_rate:.2f}%",
                 "warning_rate": f"{warning_rate:.2f}%",
             },
-            "health_status": "critical" if error_rate > 10 else "warning" if error_rate > 5 else "healthy"
+            "health_status": health_status,
+            "patterns": patterns,
+            "common_errors": common_errors,
+            "time_distribution": pattern_analysis.get("time_distribution", {})
         }
-
-        # Obtener análisis de patrones si existe
-        cursor.execute(
-            "SELECT results FROM log_analysis WHERE file_name = ? ORDER BY analyzed_at DESC LIMIT 1",
-            (file_name,)
-        )
-        analysis_row = cursor.fetchone()
-
-        if analysis_row:
-            pattern_analysis = json.loads(analysis_row[0])
-            # Añadir datos del análisis de patrones al informe
-            report["patterns"] = pattern_analysis.get("patterns", {})
-            report["common_errors"] = pattern_analysis.get("common_errors", [])
-            report["time_distribution"] = pattern_analysis.get("time_distribution", {})
-
-        # Guardar informe en la base de datos
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS log_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, file_name TEXT, report TEXT, generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
-        )
-        cursor.execute(
-            "INSERT INTO log_reports (file_name, report) VALUES (?, ?)",
-            (file_name, json.dumps(report))
-        )
-        conn.commit()
 
         logger.info(f"Informe generado para {file_name}")
         return report
@@ -335,7 +384,7 @@ def clean_log_data(file_name: str) -> Dict[str, Any]:
 
 
 # Función para procesamiento completo
-@app.task
+@app.task(name='workers.process_log_file')
 def process_log_file(file_name: str) -> Dict[str, Any]:
     """
     Realiza el procesamiento completo de un archivo de logs.
@@ -348,29 +397,23 @@ def process_log_file(file_name: str) -> Dict[str, Any]:
     """
     logger.info(f"Iniciando procesamiento completo para: {file_name}")
 
-    # Ejecutar tareas en secuencia
     try:
-        # 1. Limpiar datos
-        clean_results = clean_log_data.delay(file_name).get()
+        # Crear cadena de tareas que se ejecutan en orden
+        # El resultado pasa a la siguiente
+        workflow = chain(
+            clean_log_data.si(file_name),
+            analyze_log_patterns.si(file_name),
+            generate_log_report.si(file_name)
+        )
 
-        # 2. Analizar patrones
-        analysis_results = analyze_log_patterns.delay(file_name).get()
+        # Iniciar el flujo de trabajo de forma asincrona
+        result = workflow.apply_async()
 
-        # 3. Generar informe
-        report_results = generate_log_report.delay(file_name).get()
-
-        # Resultados combinados
-        results = {
+        return {
             "file_name": file_name,
-            "processed_at": datetime.now().isoformat(),
-            "clean_results": clean_results,
-            "analysis_results": analysis_results,
-            "report_results": report_results,
-            "status": "success"
+            "status": "processing",
+            "task_id": result.id
         }
-
-        logger.info(f"Procesamiento completo finalizado para {file_name}")
-        return results
 
     except Exception as e:
         logger.error(f"Error en el procesamiento completo: {e}")

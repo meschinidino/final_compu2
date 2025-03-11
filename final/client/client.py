@@ -96,7 +96,7 @@ async def send_log_file(file_path: str) -> Dict[str, Any]:
 
 async def main() -> None:
     """Función principal del cliente."""
-    global HOST, PORT  # Declare global variables at the beginning of the function
+    global HOST, PORT
 
     # Parsear argumentos de línea de comandos
     parser = argparse.ArgumentParser(description='Cliente para enviar archivos de logs')
