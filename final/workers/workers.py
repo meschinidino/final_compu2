@@ -1,4 +1,3 @@
-# workers.py
 import os
 import time
 import logging
@@ -16,6 +15,7 @@ from celery import chain
 load_dotenv()
 BROKER_URL = os.getenv("BROKER_URL", "pyamqp://guest@localhost//")
 DB_PATH = os.getenv("DB_PATH", "logs.db")
+STORAGE_PATH = os.getenv("STORAGE_PATH", "logs")
 
 # Configuración de logging
 logging.basicConfig(
@@ -398,15 +398,86 @@ def process_log_file(file_name: str) -> Dict[str, Any]:
     logger.info(f"Iniciando procesamiento completo para: {file_name}")
 
     try:
-        # Crear cadena de tareas que se ejecutan en orden
-        # El resultado pasa a la siguiente
+        file_path = os.path.join(STORAGE_PATH, file_name)
+
+        # Patrón para extraer información de logs
+        log_pattern = re.compile(
+            r'(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+'
+            r'(?P<level>[A-Z]+)\s+'
+            r'(?:(?P<source>[^:]+):\s+)?'
+            r'(?P<message>.*)'
+        )
+
+        # Estadísticas iniciales
+        stats = {
+            "entry_count": 0,
+            "error_count": 0,
+            "warning_count": 0,
+            "info_count": 0,
+            "file_name": file_name
+        }
+
+        # Conectar a la base de datos
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        # Procesar línea por línea el archivo de logs
+        with open(file_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+
+                stats["entry_count"] += 1
+
+                # Extraer información usando regex
+                try:
+                    match = log_pattern.match(line)
+                    if match:
+                        timestamp = match.group('timestamp')
+                        level = match.group('level')
+                        source = match.group('source') or "unknown"
+                        message = match.group('message')
+                    else:
+                        # Fallback para líneas que no coinciden con el patrón
+                        timestamp = ""
+                        level = "UNKNOWN"
+                        source = "unknown"
+                        message = line
+
+                    # Actualizar estadísticas según el nivel
+                    level_upper = level.upper()
+                    if "ERROR" in level_upper:
+                        stats["error_count"] += 1
+                    elif "WARN" in level_upper:
+                        stats["warning_count"] += 1
+                    elif "INFO" in level_upper:
+                        stats["info_count"] += 1
+
+                    # Guardar entrada en la base de datos
+                    cursor.execute(
+                        "INSERT INTO log_entries (timestamp, level, source, message, file_name) VALUES (?, ?, ?, ?, ?)",
+                        (timestamp, level, source, message, file_name)
+                    )
+                except Exception as e:
+                    logger.error(f"Error al procesar línea: {e}")
+
+        # Guardar estadísticas en la base de datos
+        cursor.execute(
+            "INSERT INTO log_stats (file_name, entry_count, error_count, warning_count, info_count) VALUES (?, ?, ?, ?, ?)",
+            (file_name, stats["entry_count"], stats["error_count"], stats["warning_count"], stats["info_count"])
+        )
+        conn.commit()
+        conn.close()
+
+        # Create chain of tasks that execute in order
         workflow = chain(
             clean_log_data.si(file_name),
             analyze_log_patterns.si(file_name),
             generate_log_report.si(file_name)
         )
 
-        # Iniciar el flujo de trabajo de forma asincrona
+        # Start the workflow asynchronously
         result = workflow.apply_async()
 
         return {
