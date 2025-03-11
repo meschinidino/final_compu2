@@ -1,4 +1,3 @@
-# server.py
 import asyncio
 import logging
 import os
@@ -135,24 +134,21 @@ class LogServerProtocol:
 # Procesador de logs (ejecutado en un proceso separado)
 def log_processor(task_queue: mp.Queue) -> None:
     """
-    Procesa archivos de logs desde la cola de tareas.
-
-    Args:
-        task_queue: Cola para recibir tareas del servidor
+    Procesa logs de la cola de tareas
     """
     logger = logging.getLogger('log_processor')
     logger.info("Procesador de logs iniciado")
 
-    # Conectar a la base de datos
-    conn = sqlite3.connect(DB_PATH)
+    # Import del modulo de worker
+    import importlib.util
+    import os
 
-    # Patrón para extraer información de logs
-    log_pattern = re.compile(
-        r'(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+'
-        r'(?P<level>[A-Z]+)\s+'
-        r'(?:(?P<source>[^:]+):\s+)?'
-        r'(?P<message>.*)'
-    )
+    workers_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "workers", "workers.py")
+
+    spec = importlib.util.spec_from_file_location("workers", workers_path)
+    workers_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(workers_module)
+    process_log_file = workers_module.process_log_file
 
     while True:
         try:
@@ -162,76 +158,16 @@ def log_processor(task_queue: mp.Queue) -> None:
 
             file_path = task["file_path"]
             file_name = task["file_name"]
-            logger.info(f"Procesando archivo: {file_path}")
+            logger.info(f"Enviando archivo al worker: {file_path}")
 
-            # Estadísticas iniciales
-            stats = {
-                "entry_count": 0,
-                "error_count": 0,
-                "warning_count": 0,
-                "info_count": 0,
-                "file_name": file_name
-            }
+            # Llamar al worker
+            process_log_file.delay(file_name)
 
-            # Procesar línea por línea el archivo de logs
-            # Procesar línea por línea el archivo de logs
-            with open(file_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    stats["entry_count"] += 1
-
-                    # Extraer información usando regex
-                    try:
-                        match = log_pattern.match(line)
-                        if match:
-                            timestamp = match.group('timestamp')
-                            level = match.group('level')
-                            source = match.group('source') or "unknown"
-                            message = match.group('message')
-                        else:
-                            # Fallback para líneas que no coinciden con el patrón
-                            timestamp = ""
-                            level = "UNKNOWN"
-                            source = "unknown"
-                            message = line
-
-                        # Actualizar estadísticas según el nivel
-                        level_upper = level.upper()
-                        if "ERROR" in level_upper:
-                            stats["error_count"] += 1
-                        elif "WARN" in level_upper:
-                            stats["warning_count"] += 1
-                        elif "INFO" in level_upper:
-                            stats["info_count"] += 1
-
-                        # Guardar entrada en la base de datos
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            "INSERT INTO log_entries (timestamp, level, source, message, file_name) VALUES (?, ?, ?, ?, ?)",
-                            (timestamp, level, source, message, file_name)
-                        )
-                    except Exception as e:
-                        logger.error(f"Error al procesar línea: {e}")
-
-
-            # Guardar estadísticas en la base de datos
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO log_stats (file_name, entry_count, error_count, warning_count, info_count) VALUES (?, ?, ?, ?, ?)",
-                (file_name, stats["entry_count"], stats["error_count"], stats["warning_count"], stats["info_count"])
-            )
-            conn.commit()
-
-            logger.info(
-                f"Archivo {file_name} procesado. Entradas: {stats['entry_count']}, Errores: {stats['error_count']}")
+            logger.info(f"Archivo {file_name} enviado al worker para procesamiento")
 
         except Exception as e:
             logger.error(f"Error al procesar tarea: {e}")
 
-    conn.close()
     logger.info("Procesador de logs finalizado")
 
 
